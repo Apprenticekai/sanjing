@@ -124,12 +124,6 @@ public partial class MainWindow : Window
             Dispatcher.BeginInvoke(() =>
             {
                 Panel1.Focus();
-                MessageBox.Show(
-                    "点击任意一块空白画面，选择要播放的图片文件夹。\n\n" +
-                    "三块画面可以分别选择不同文件夹，各自独立播放。",
-                    "欢迎使用三境",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
             }, DispatcherPriority.Background);
         }
     }
