@@ -2,6 +2,8 @@
 
 一个轻量的 Windows 三画面图片放映器。适合在同一块屏幕上同时查看三组照片、作品或素材。
 
+[**下载 Windows 版**](https://github.com/Apprenticekai/sanjing/releases/latest) · [查看源码](https://github.com/Apprenticekai/sanjing)
+
 三块画面各有独立计时器、独立文件夹和独立播放状态。可以拖动分隔线调整宽度，也可以让其中一块画面单独全屏。
 
 ![三境界面](docs/screenshot.png)
@@ -68,11 +70,7 @@ dotnet run -c Release
 dotnet publish -c Release -r win-x64 --self-contained false -o dist
 ```
 
-单文件发布默认依赖本机 .NET 8 Desktop Runtime。若需要免安装运行，可改为：
-
-```powershell
-dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o dist
-```
+发行包采用单文件发布，依赖本机 .NET 8 Desktop Runtime，不需要 .NET SDK。
 
 ## 隐私
 
