@@ -1,0 +1,62 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build -c Release --no-restore
+
+      - name: Publish framework-dependent single file
+        run: >
+          dotnet publish -c Release -r win-x64
+          --self-contained false
+          -p:PublishSingleFile=true
+          -o publish/framework
+
+      - name: Publish self-contained single file
+        run: >
+          dotnet publish -c Release -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:EnableCompressionInSingleFile=true
+          -o publish/standalone
+
+      - name: Upload framework-dependent build
+        uses: actions/upload-artifact@v4
+        with:
+          name: SanJing-win-x64
+          path: publish/framework/
+
+      - name: Upload standalone build
+        uses: actions/upload-artifact@v4
+        with:
+          name: SanJing-win-x64-standalone
+          path: publish/standalone/
+
+      - name: Attach binaries to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            publish/framework/SanJing.exe
+            publish/standalone/SanJing.exe
