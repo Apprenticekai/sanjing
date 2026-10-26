@@ -28,8 +28,8 @@ public sealed class SlideshowPanel : Grid
     private readonly DispatcherTimer _playbackTimer;
     private readonly DispatcherTimer _hideHoverTimer;
     private readonly List<ImageItem> _images = [];
-    private readonly List<FolderQueue> _folderQueue = [];
     private readonly Dictionary<int, BitmapSource> _decodedImages = [];
+    private readonly RandomFolderCycle _randomFolderCycle = new();
     private CancellationTokenSource? _decodeCts;
     private string? _activePath;
     private int _switchVersion;
@@ -268,7 +268,6 @@ public sealed class SlideshowPanel : Grid
         StopPlaybackTimer();
         CancelDecode();
         _images.Clear();
-        _folderQueue.Clear();
         _decodedImages.Clear();
         _index = 0;
         _rootFolder = rootFolder;
@@ -302,6 +301,7 @@ public sealed class SlideshowPanel : Grid
         }
         _folderLabel.ToolTip = activeFolder;
         _index = 0;
+        RecordDisplayedFolder(activeFolder);
         ShowImageAsync(_index, true);
         StartPlayback();
         PreloadNext(0);
@@ -390,7 +390,6 @@ public sealed class SlideshowPanel : Grid
         StopPlaybackTimer();
         CancelDecode();
         _images.Clear();
-        _folderQueue.Clear();
         _decodedImages.Clear();
         _images.AddRange(items);
         _index = 0;
@@ -665,86 +664,64 @@ public sealed class SlideshowPanel : Grid
         PreloadNext(_index);
     }
 
-    private void BuildRandomSiblingQueue()
+    private RandomFolderPool? FindRandomFolderPool()
     {
-        _folderQueue.Clear();
         var active = new DirectoryInfo(_activeFolder);
-        if (!active.Exists)
+        var parent = active.Parent;
+        if (!active.Exists || parent is null || !parent.Exists)
         {
-            return;
+            return null;
         }
 
         try
         {
-            var siblings = active.Parent?.GetDirectories()
-                ?.Where(directory => !string.Equals(
+            var folders = parent.GetDirectories()
+                .Where(directory => IsInsideRoot(directory.FullName))
+                .Select(directory => new FolderQueue(
                     directory.FullName,
-                    active.FullName,
-                    StringComparison.OrdinalIgnoreCase))
-                ?.Where(directory => IsInsideRoot(directory.FullName))
-                ?.OrderBy(_ => Random.Shared.Next())
-                .ToList() ?? [];
-
-            if (siblings.Count == 0)
-            {
-                var ancestor = active.Parent;
-                while (ancestor is not null && IsInsideRoot(ancestor.FullName))
-                {
-                    siblings = ancestor.GetDirectories()
-                        .Where(directory => !string.Equals(
-                            directory.FullName,
-                            active.FullName,
-                            StringComparison.OrdinalIgnoreCase))
-                        .Where(directory => IsInsideRoot(directory.FullName))
-                        .OrderBy(_ => Random.Shared.Next())
-                        .ToList();
-                    if (siblings.Count > 0)
-                    {
-                        break;
-                    }
-                    ancestor = ancestor.Parent;
-                }
-            }
-
-            siblings = siblings
-                .Where(directory => !string.Equals(
-                    directory.FullName,
-                    active.FullName,
-                    StringComparison.OrdinalIgnoreCase))
+                    EnumerateDirectImages(directory.FullName)))
+                .Where(folder => folder.Images.Count > 0)
+                .OrderBy(folder => folder.FullPath, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            foreach (var sibling in siblings)
+            var currentFolder = folders.FirstOrDefault(folder => string.Equals(
+                folder.FullPath,
+                _activeFolder,
+                StringComparison.OrdinalIgnoreCase));
+            if (currentFolder is null)
             {
-                var files = EnumerateDirectImages(sibling.FullName);
-                if (files.Count > 0)
-                {
-                    _folderQueue.Add(new FolderQueue(sibling.FullName, files));
-                }
+                return null;
             }
+
+            return new RandomFolderPool(parent.FullName, folders);
         }
         catch
         {
-            _folderQueue.Clear();
+            return null;
         }
     }
 
-    private void LoadQueuedFolder(bool shift)
+    private FolderQueue? PickRandomSibling()
     {
-        if (_folderQueue.Count == 0)
+        var pool = FindRandomFolderPool();
+        if (pool is null)
         {
-            return;
+            return null;
         }
 
-        var folder = shift ? _folderQueue[0] : _folderQueue[^1];
-        if (shift)
-        {
-            _folderQueue.RemoveAt(0);
-        }
-        else
-        {
-            _folderQueue.RemoveAt(_folderQueue.Count - 1);
-        }
+        _randomFolderCycle.RecordDisplayed(pool.Key, _activeFolder);
+        var selectedPath = _randomFolderCycle.Pick(
+            pool.Key,
+            pool.Folders.Select(folder => folder.FullPath).ToList(),
+            _activeFolder);
+        return pool.Folders.FirstOrDefault(folder => string.Equals(
+            folder.FullPath,
+            selectedPath,
+            StringComparison.OrdinalIgnoreCase));
+    }
 
+    private void LoadRandomFolder(FolderQueue folder)
+    {
         _images.Clear();
         _images.AddRange(folder.Images);
         _decodedImages.Clear();
@@ -755,22 +732,29 @@ public sealed class SlideshowPanel : Grid
         _folderLabel.ToolTip = folder.FullPath;
         _index = 0;
         _switchVersion++;
+        RecordDisplayedFolder(folder.FullPath);
         ShowImageAsync(_index);
         PreloadNext(_index);
     }
 
     private bool TryLoadRandomSibling()
     {
-        if (_folderQueue.Count == 0)
-        {
-            BuildRandomSiblingQueue();
-        }
-        if (_folderQueue.Count == 0)
+        var folder = PickRandomSibling();
+        if (folder is null)
         {
             return false;
         }
-        LoadQueuedFolder(shift: true);
+        LoadRandomFolder(folder);
         return true;
+    }
+
+    private void RecordDisplayedFolder(string folder)
+    {
+        var parent = new DirectoryInfo(folder).Parent;
+        if (parent is not null && parent.Exists)
+        {
+            _randomFolderCycle.RecordDisplayed(parent.FullName, folder);
+        }
     }
 
     private bool IsInsideRoot(string path)
@@ -915,8 +899,7 @@ public sealed class SlideshowPanel : Grid
         {
             return;
         }
-        BuildRandomSiblingQueue();
-        if (_folderQueue.Count == 0)
+        if (!TryLoadRandomSibling())
         {
             MessageBox.Show(
                 "当前文件夹所在目录中没有找到其他含图片的同级文件夹。",
@@ -925,7 +908,6 @@ public sealed class SlideshowPanel : Grid
                 MessageBoxImage.Information);
             return;
         }
-        LoadQueuedFolder(shift: true);
         if (_isPlaying)
         {
             StartPlayback();
@@ -978,7 +960,7 @@ public sealed class SlideshowPanel : Grid
 
         var wasPlaying = _isPlaying;
         var deletedFolder = _activeFolder;
-        var nextFolder = PickRandomSiblingBeforeDelete(deletedFolder);
+        var nextFolder = PickRandomSibling();
         StopPlayback();
         try
         {
@@ -994,13 +976,12 @@ public sealed class SlideshowPanel : Grid
             return;
         }
 
-        _folderQueue.RemoveAll(folder => string.Equals(
-            folder.FullPath,
-            deletedFolder,
-            StringComparison.OrdinalIgnoreCase));
-        if (nextFolder is not null && Directory.Exists(nextFolder))
+        _randomFolderCycle.Forget(deletedFolder);
+        if (nextFolder is not null &&
+            Directory.Exists(nextFolder.FullPath) &&
+            nextFolder.Images.Count > 0)
         {
-            LoadFolderCore(_rootFolder, nextFolder, nextFolder);
+            LoadRandomFolder(nextFolder);
             if (wasPlaying)
             {
                 StartPlayback();
@@ -1009,33 +990,6 @@ public sealed class SlideshowPanel : Grid
         else
         {
             CloseImage();
-        }
-    }
-
-    private string? PickRandomSiblingBeforeDelete(string folder)
-    {
-        try
-        {
-            var directory = new DirectoryInfo(folder);
-            var parent = directory.Parent;
-            if (parent is null || !parent.Exists)
-            {
-                return null;
-            }
-            return parent.GetDirectories()
-                .Where(candidate => !string.Equals(
-                    candidate.FullName,
-                    folder,
-                    StringComparison.OrdinalIgnoreCase))
-                .Where(candidate => IsInsideRoot(candidate.FullName))
-                .Where(candidate => EnumerateDirectImages(candidate.FullName).Count > 0)
-                .OrderBy(_ => Random.Shared.Next())
-                .Select(candidate => candidate.FullName)
-                .FirstOrDefault();
-        }
-        catch
-        {
-            return null;
         }
     }
 
@@ -1068,4 +1022,5 @@ public sealed class SlideshowPanel : Grid
 
     private sealed record ImageItem(string Path, string DisplayPath);
     private sealed record FolderQueue(string FullPath, List<ImageItem> Images);
+    private sealed record RandomFolderPool(string Key, List<FolderQueue> Folders);
 }
